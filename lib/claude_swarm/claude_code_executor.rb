@@ -45,11 +45,14 @@ module ClaudeSwarm
 
         # Read stderr in a separate thread
         stderr_thread = Thread.new do
-          stderr.each_line { |line| stderr_output << line }
+          stderr.each_line do |line|
+            stderr_output << ensure_utf8(line)
+          end
         end
 
         # Process stdout line by line
         stdout.each_line do |line|
+          line = ensure_utf8(line)
           json_data = JSON.parse(line.strip)
 
           # Log each JSON event
@@ -307,6 +310,14 @@ module ClaudeSwarm
       end
 
       cmd_array
+    end
+
+    # Ensure a string is valid UTF-8, replacing invalid sequences
+    # This is necessary because Claude Code may output non-UTF-8 characters
+    # when processing binary data or interacting with systems that use
+    # different encodings.
+    def ensure_utf8(line)
+      line.force_encoding('UTF-8').scrub
     end
 
     class ExecutionError < StandardError; end

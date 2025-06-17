@@ -298,4 +298,52 @@ class ClaudeCodeExecutorTest < Minitest::Test
     assert_includes command_array, "--dangerously-skip-permissions"
     refute_includes command_array, "--allowedTools"
   end
+
+  def test_handles_non_ascii_output_encoding
+    # Test that the executor can handle non-ASCII characters in stdout without raising encoding errors
+    mock_response = create_streaming_json(
+      session_id: "test-encoding-123",
+      result: "Output with emoji: 🌍 and unicode: 世界"
+    )
+
+    mock_popen3(mock_response) do
+      result = @executor.execute("test with unicode")
+
+      assert_equal "Output with emoji: 🌍 and unicode: 世界", result["result"]
+      assert_equal "test-encoding-123", @executor.session_id
+    end
+  end
+
+  def test_handles_invalid_utf8_sequences
+    # Test that invalid UTF-8 bytes in the stream are replaced with the Unicode replacement character
+    # Create valid JSON lines
+    init_json = '{"type":"system","subtype":"init","session_id":"test-invalid-utf8","tools":["Tool1","Tool2"]}'
+    assistant_json = '{"type":"assistant","message":{"content":[{"type":"text","text":"Processing..."}]}}'
+    result_json = '{"type":"result","subtype":"success","result":"Text processed","cost_usd":0.01,"duration_ms":500,"session_id":"test-invalid-utf8"}'
+
+    # Add a line with invalid UTF-8 that should be handled gracefully
+    invalid_line = "Invalid UTF-8: \xFF\xFE and \xC0\x80"
+
+    # Build mock response
+    mock_response = [init_json, assistant_json, invalid_line, result_json].join("\n")
+
+    # Force the entire response to BINARY to simulate raw bytes from stdout
+    mock_response = mock_response.dup.force_encoding('BINARY')
+
+    mock_popen3(mock_response) do
+      # Should handle the invalid bytes gracefully
+      result = @executor.execute("test with invalid utf8")
+
+      assert_equal "test-invalid-utf8", @executor.session_id
+      assert_equal "Text processed", result["result"]
+    end
+
+    # Check that the invalid UTF-8 was logged with replacement characters
+    log_path = File.join(@executor.session_path, "session.log")
+    log_content = File.read(log_path, encoding: 'UTF-8')
+
+    # Verify the warning about failed JSON parsing contains replacement characters
+    assert log_content.include?("Failed to parse JSON line:")
+    assert log_content.include?("\uFFFD")  # Unicode replacement character
+  end
 end
